@@ -182,6 +182,8 @@ export class TraceLens {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
+      let shouldRetry = true;
+
       try {
         const response = await fetch(`${this.endpoint}/v1/ingest`, {
           method: "POST",
@@ -201,9 +203,14 @@ export class TraceLens {
         );
 
         // Do not retry client errors such as invalid keys or invalid payloads.
-        if (response.status < 500 || attempt >= this.retries) throw error;
-      } catch (error) {
+        if (response.status < 500) {
+          shouldRetry = false;
+          throw error;
+        }
+
         if (attempt >= this.retries) throw error;
+      } catch (error) {
+        if (!shouldRetry || attempt >= this.retries) throw error;
       } finally {
         clearTimeout(timeout);
       }
