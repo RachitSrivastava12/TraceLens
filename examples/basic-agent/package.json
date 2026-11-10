@@ -1,0 +1,15 @@
+{
+  "name": "@tracelens/basic-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@tracelens/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
+  }
+}

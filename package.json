@@ -1,15 +1,14 @@
 {
-  "name": "TraceLens",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "name": "tracelens",
+  "version": "0.1.0",
+  "private": true,
   "packageManager": "pnpm@10.34.5",
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "test": "turbo test",
+    "typecheck": "turbo typecheck"
+  },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
