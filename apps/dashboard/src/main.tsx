@@ -1,293 +1,371 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import ReactDOM from "react-dom/client";
+import { useEffect, useMemo, useState } from "react";
 import "./style.css";
-
-const API_KEY = "tl_dev_local_key";
-
-type Span = {
-  id: string;
-  parent_span_id: string | null;
-  name: string;
-  type: string;
-  status: string;
-  duration_ms: string | number | null;
-  input: unknown;
-  output: unknown;
-  error: { name: string; message: string; stack?: string } | null;
-};
 
 type Trace = {
   id: string;
   name: string;
   status: string;
   started_at: string;
-  ended_at: string | null;
-  duration_ms: string | number | null;
-  metadata: Record<string, unknown>;
+  ended_at?: string;
+  duration_ms?: number;
+  metadata?: Record<string, unknown>;
 };
 
-type TraceDetail = {
-  trace: Trace;
-  spans: Span[];
-  events: unknown[];
+type Span = {
+  id: string;
+  trace_id: string;
+  parent_span_id?: string | null;
+  name: string;
+  type: string;
+  status: string;
+  started_at: string;
+  duration_ms?: number;
+  input?: unknown;
+  output?: unknown;
+  error?: { name?: string; message?: string; stack?: string } | null;
+  attributes?: Record<string, unknown>;
 };
 
+type TraceDetail = { trace: Trace; spans: Span[]; events?: unknown[] };
+
+const API_KEY = "tl_dev_local_key";
+const API = "";
 const headers = { "x-api-key": API_KEY };
 
-async function fetchTraces(): Promise<Trace[]> {
-  const response = await fetch("/v1/traces", { headers });
-  if (!response.ok) throw new Error("Could not load traces");
-  const data = await response.json();
-  return data.traces;
-}
-
-async function fetchDetail(id: string): Promise<TraceDetail> {
-  const response = await fetch(`/v1/traces/${id}`, { headers });
-  if (!response.ok) throw new Error("Could not load trace details");
+async function request<T>(path: string): Promise<T> {
+  const response = await fetch(`${API}${path}`, { headers });
+  if (!response.ok) throw new Error(`Request failed (${response.status})`);
   return response.json();
 }
 
-function duration(value: unknown) {
-  const ms = Number(value);
-  if (!Number.isFinite(ms)) return "—";
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  return `${(ms / 1000).toFixed(2)} s`;
+function Icon({ name }: { name: string }) {
+  const paths: Record<string, string> = {
+    grid: "M3 3h7v7H3z M14 3h7v7h-7z M14 14h7v7h-7z M3 14h7v7H3z",
+    activity: "M3 12h4l3-8 4 16 3-8h4",
+    layers: "m12 3 9 5-9 5-9-5 9-5z M3 12l9 5 9-5 M3 16l9 5 9-5",
+    clock: "M12 8v4l3 2 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
+    check: "m5 12 4 4L19 6",
+    alert: "M12 3 2 20h20L12 3z M12 9v4 M12 17h.01",
+    search: "m20 20-4.5-4.5 M18 10.5a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0",
+    arrow: "M7 17 17 7 M7 7h10v10",
+    refresh: "M20 7v5h-5 M4 17v-5h5 M5.6 9a7 7 0 0 1 12-2L20 12 M4 12l2.4 5a7 7 0 0 0 12-2",
+    moon: "M20.5 14A8.5 8.5 0 0 1 10 3.5 8.5 8.5 0 1 0 20.5 14z",
+    sun: "M12 3v2 M12 19v2 M3 12h2 M19 12h2 M5.6 5.6 7 7 M17 17l1.4 1.4 M18.4 5.6 17 7 M7 17l-1.4 1.4 M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
+    chevron: "m9 18 6-6-6-6",
+    close: "M18 6 6 18 M6 6l12 12",
+    menu: "M4 6h16 M4 12h16 M4 18h16",
+    terminal: "m4 17 6-5-6-5 M12 19h8",
+  };
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"
+      className="icon">
+      <path d={paths[name] || paths.activity} />
+    </svg>
+  );
 }
 
-function timeAgo(value: string) {
+function Status({ status }: { status: string }) {
+  const value = status?.toLowerCase() || "unknown";
+  return <span className={`status status-${value}`}><i />{value}</span>;
+}
+
+function timeAgo(value?: string) {
+  if (!value) return "—";
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return new Date(value).toLocaleDateString();
+  return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-function Status({ value }: { value: string }) {
-  return <span className={`status ${value}`}><i />{value}</span>;
+function duration(value?: number) {
+  if (value == null) return "—";
+  return value >= 1000 ? `${(value / 1000).toFixed(2)}s` : `${Math.round(value)}ms`;
 }
 
-function Icon({ name }: { name: string }) {
-  const paths: Record<string, React.ReactNode> = {
-    overview: <><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></>,
-    traces: <><path d="M4 5h16M4 12h16M4 19h16"/><circle cx="8" cy="5" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="10" cy="19" r="1.5"/></>,
-    activity: <><path d="M3 12h4l3-8 4 16 3-8h4"/></>,
-    clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
-    check: <><path d="m5 12 4 4L19 6"/></>,
-    alert: <><path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v4m0 3h.01"/></>,
-    arrow: <><path d="M7 17 17 7M7 7h10v10"/></>,
-    search: <><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4 4"/></>,
-    sun: <><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></>,
-    moon: <><path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5 8.5 8.5 0 1 0 20.5 14.2Z"/></>,
-    refresh: <><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2"/></>,
-    chevron: <path d="m7 10 5 5 5-5"/>,
-    back: <><path d="m15 18-6-6 6-6"/><path d="M9 12h12"/></>,
-    layers: <><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></>,
-    bolt: <path d="m13 2-3 9h7l-6 11 2-9H6l7-11Z"/>,
-  };
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] ?? paths.activity}</svg>;
-}
-
-function Metric({ label, value, note, icon, tone = "teal" }: {
-  label: string; value: string; note: string; icon: string; tone?: string;
+function Metric({ title, value, note, icon, tone }: {
+  title: string; value: string | number; note: string; icon: string; tone: string;
 }) {
-  return <article className="metric-card">
-    <div className="metric-head"><span>{label}</span><span className={`metric-icon ${tone}`}><Icon name={icon}/></span></div>
-    <div className="metric-value">{value}</div>
-    <div className="metric-note">{note}</div>
-  </article>;
+  return (
+    <article className="metric-card">
+      <div className="metric-top">
+        <span>{title}</span>
+        <span className={`metric-icon ${tone}`}><Icon name={icon} /></span>
+      </div>
+      <strong>{value}</strong>
+      <small>{note}</small>
+    </article>
+  );
 }
 
 function ActivityChart({ traces }: { traces: Trace[] }) {
-  const points = useMemo(() => {
-    const days = Array.from({ length: 7 }, (_, index) => {
-      const date = new Date();
-      date.setDate(date.getDate() - (6 - index));
-      date.setHours(0, 0, 0, 0);
-      const next = new Date(date);
-      next.setDate(next.getDate() + 1);
-      const dayTraces = traces.filter(t => {
-        const time = new Date(t.started_at).getTime();
-        return time >= date.getTime() && time < next.getTime();
-      });
-      return {
-        label: date.toLocaleDateString(undefined, { weekday: "short" }),
-        total: dayTraces.length,
-        failed: dayTraces.filter(t => t.status === "error").length,
-      };
-    });
-    return days;
-  }, [traces]);
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date();
+    date.setDate(date.getDate() - (6 - index));
+    return date;
+  });
 
-  const max = Math.max(1, ...points.map(p => p.total));
-  const coords = points.map((p, i) => ({
-    x: 30 + i * 53,
-    y: 125 - (p.total / max) * 94,
-    failedY: 125 - (p.failed / max) * 94,
-  }));
-  const line = coords.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
-  const area = `${line} L ${coords[coords.length - 1].x} 132 L ${coords[0].x} 132 Z`;
+  const values = days.map(day => traces.filter(trace =>
+    new Date(trace.started_at).toDateString() === day.toDateString()
+  ).length);
+  const max = Math.max(1, ...values);
+  const points = values.map((value, index) =>
+    `${36 + index * 65},${112 - (value / max) * 76}`
+  ).join(" ");
 
-  return <div className="chart-wrap">
-    <div className="chart-summary"><div><strong>{traces.length}</strong><span> executions loaded</span></div><span className="chart-legend"><i/> Traces <i className="legend-error"/> Failed</span></div>
-    <svg className="activity-chart" viewBox="0 0 370 165" role="img" aria-label="Trace activity over the last seven days">
-      {[35, 65, 95, 125].map(y => <line key={y} x1="20" y1={y} x2="350" y2={y} className="grid-line"/>)}
-      <defs><linearGradient id="traceArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#36c9bb" stopOpacity=".32"/><stop offset="100%" stopColor="#36c9bb" stopOpacity="0"/></linearGradient></defs>
-      <path d={area} fill="url(#traceArea)"/>
-      <path d={line} className="chart-line"/>
-      {coords.map((p, i) => <g key={i}><circle cx={p.x} cy={p.y} r="3.5" className="chart-point"/><text x={p.x} y="153" textAnchor="middle" className="axis-label">{points[i].label}</text></g>)}
-    </svg>
-    <p className="chart-footnote">Daily activity · Last 7 days · Based on loaded traces</p>
-  </div>;
-}
-
-function Distribution({ traces }: { traces: Trace[] }) {
-  const success = traces.filter(t => t.status === "success").length;
-  const failed = traces.filter(t => t.status === "error").length;
-  const running = traces.filter(t => t.status === "running").length;
-  const total = traces.length || 1;
-  const items = [
-    { label: "Successful", count: success, color: "success" },
-    { label: "Failed", count: failed, color: "failed" },
-    { label: "Running", count: running, color: "running" },
-  ];
-  return <div className="distribution">
-    <div className="distribution-total"><strong>{traces.length}</strong><span>Total executions</span></div>
-    <div className="distribution-bars">{items.map(item => <div key={item.label} className="distribution-row"><div className="distribution-label"><span><i className={item.color}/>{item.label}</span><b>{item.count}</b></div><div className="bar-track"><div className={`bar-fill ${item.color}`} style={{ width: `${item.count / total * 100}%` }}/></div></div>)}</div>
-  </div>;
+  return (
+    <div className="chart-wrap">
+      <div className="chart-legend"><span><i /> Executions</span><span><i className="red-dot" /> Failed</span></div>
+      <svg className="activity-chart" viewBox="0 0 450 145" preserveAspectRatio="none">
+        {[35, 73, 111].map(y => <line key={y} x1="30" x2="435" y1={y} y2={y} className="chart-grid" />)}
+        <polyline points={points} className="chart-line" />
+        {values.map((value, index) => (
+          <circle key={index} cx={36 + index * 65} cy={112 - (value / max) * 76} r="4" className="chart-point" />
+        ))}
+      </svg>
+      <div className="chart-labels">{days.map(day => <span key={day.toISOString()}>{day.toLocaleDateString("en", { weekday: "short" })}</span>)}</div>
+      <p className="chart-footnote">Daily execution volume · Based on loaded traces</p>
+    </div>
+  );
 }
 
 function App() {
   const [traces, setTraces] = useState<Trace[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [detail, setDetail] = useState<TraceDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [selected, setSelected] = useState<TraceDetail | null>(null);
+  const [view, setView] = useState("Overview");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [view, setView] = useState("overview");
   const [theme, setTheme] = useState(() => localStorage.getItem("tracelens-theme") || "light");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [apiOnline, setApiOnline] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
+
+  async function loadTraces() {
+    try {
+      const result = await request<{ traces: Trace[] } | Trace[]>("/v1/traces");
+      const list = Array.isArray(result) ? result : result.traces || [];
+      setTraces(list);
+      setError("");
+      setApiOnline(true);
+    } catch {
+      setApiOnline(false);
+      setError("Unable to connect to the TraceLens API. Check that the API server is running.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function openTrace(trace: Trace) {
+    try {
+      const result = await request<TraceDetail>(`/v1/traces/${trace.id}`);
+      setSelected(result);
+    } catch {
+      setError("Couldn't load this trace. Please try again.");
+    }
+  }
+
+  useEffect(() => {
+    loadTraces();
+    const interval = window.setInterval(loadTraces, 10000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("tracelens-theme", theme);
   }, [theme]);
 
-  const load = useCallback(async () => {
-    try {
-      const data = await fetchTraces();
-      setTraces(data);
-      setError("");
-    } catch {
-      setError("Unable to connect to TraceLens API. Check that your API server is running.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-    const timer = setInterval(load, 10000);
-    return () => clearInterval(timer);
-  }, [load]);
-
-  const openTrace = async (id: string) => {
-    setSelected(id);
-    setDetail(null);
-    setDetailLoading(true);
-    setView("detail");
-    try {
-      setDetail(await fetchDetail(id));
-      setError("");
-    } catch {
-      setError("Unable to load trace details.");
-    } finally {
-      setDetailLoading(false);
-    }
-  };
-
-  const filtered = traces.filter(trace => {
-    const matchesSearch = `${trace.name} ${trace.id}`.toLowerCase().includes(search.toLowerCase());
-    return matchesSearch && (filter === "all" || trace.status === filter);
-  });
-
   const failed = traces.filter(t => t.status === "error").length;
   const successful = traces.filter(t => t.status === "success").length;
-  const avg = traces.length ? traces.reduce((sum, t) => sum + Number(t.duration_ms || 0), 0) / traces.length : 0;
+  const average = traces.length
+    ? traces.reduce((sum, t) => sum + Number(t.duration_ms || 0), 0) / traces.length
+    : 0;
   const successRate = traces.length ? Math.round(successful / traces.length * 100) : 0;
-  const pageTitle = view === "detail" ? "Trace inspection" : view === "traces" ? "Trace explorer" : "Overview";
 
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <div className="brand"><div className="brand-mark"><Icon name="activity"/></div><div><b>TraceLens</b><small>AGENT OBSERVABILITY</small></div></div>
-      <div className="workspace"><div className="workspace-icon">T</div><div><b>TraceLens Local</b><small>Development project</small></div><Icon name="chevron"/></div>
-      <div className="nav-label">WORKSPACE</div>
-      <button className={`nav-item ${view === "overview" ? "active" : ""}`} onClick={() => setView("overview")}><Icon name="overview"/>Overview</button>
-      <button className={`nav-item ${view === "traces" || view === "detail" ? "active" : ""}`} onClick={() => setView("traces")}><Icon name="traces"/>Traces<span className="nav-count">{traces.length}</span></button>
-      <div className="nav-label nav-spaced">MONITORING</div>
-      <button className="nav-item" onClick={() => setView("overview")}><Icon name="activity"/>Activity</button>
-      <div className="sidebar-bottom">
-        <div className="connection"><i/> API connected</div>
-        <div className="user"><div className="avatar">R</div><div><b>Local Developer</b><small>Development workspace</small></div><span className="user-menu">···</span></div>
-        <div className="sidebar-version">TRACELENS <span>v0.1.0 · LOCAL</span></div>
-      </div>
-    </aside>
+  const filtered = useMemo(() => traces.filter(trace => {
+    const matchesSearch = `${trace.name} ${trace.id}`.toLowerCase().includes(search.toLowerCase());
+    const matchesStatus = filter === "all" || trace.status === filter;
+    return matchesSearch && matchesStatus;
+  }), [traces, search, filter]);
 
-    <main className="main">
-      <header className="topbar">
-        <div className="breadcrumbs"><span>Workspace</span><span>/</span><b>{pageTitle}</b></div>
-        <div className="top-actions"><span className="live-indicator"><i/> LIVE DATA</span><button className="theme-toggle" onClick={() => setTheme(theme === "light" ? "dark" : "light")} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}><Icon name={theme === "light" ? "moon" : "sun"}/><span>{theme === "light" ? "Dark mode" : "Light mode"}</span></button><button className="refresh-button" onClick={load}><Icon name="refresh"/> Refresh</button><div className="top-avatar">R</div></div>
-      </header>
+  const go = (next: string) => {
+    setView(next);
+    setSelected(null);
+    setMobileNav(false);
+  };
 
-      <div className="content">
-        {error && <div className="error-banner">{error}</div>}
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${mobileNav ? "sidebar-open" : ""}`}>
+        <div className="brand">
+          <div className="brand-mark"><Icon name="activity" /></div>
+          <div><b>TraceLens</b><small>AGENT OBSERVABILITY</small></div>
+          <button className="mobile-close" onClick={() => setMobileNav(false)}><Icon name="close" /></button>
+        </div>
 
-        {view !== "detail" ? <>
-          <section className="page-heading"><div><div className="eyebrow"><span/> AGENT OBSERVABILITY</div><h1>{view === "traces" ? "Trace explorer" : "Good morning, developer"}</h1><p>{view === "traces" ? "Search, filter and inspect every recorded execution." : "Here's what's happening across your AI agent executions."}</p></div><div className="heading-date">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</div></section>
+        <button className="project-switch">
+          <span className="project-avatar">T</span>
+          <span><b>TraceLens Local</b><small>Development project</small></span>
+          <span className="switch-chevron">⌄</span>
+        </button>
 
-          <section className="metrics">
-            <Metric label="Total executions" value={traces.length.toString()} note="Stored traces" icon="layers"/>
-            <Metric label="Successful runs" value={successful.toString()} note={`${successRate}% success rate`} icon="check" tone="green"/>
-            <Metric label="Failed executions" value={failed.toString()} note={failed ? "Require attention" : "No failures recorded"} icon="alert" tone="orange"/>
-            <Metric label="Average latency" value={duration(avg)} note="Across loaded executions" icon="clock" tone="blue"/>
-          </section>
+        <div className="nav-label">WORKSPACE</div>
+        <nav>
+          <button className={view === "Overview" ? "nav-active" : ""} onClick={() => go("Overview")}><Icon name="grid" />Overview</button>
+          <button className={view === "Traces" ? "nav-active" : ""} onClick={() => go("Traces")}><Icon name="layers" />Traces<span className="nav-count">{traces.length}</span></button>
+          <div className="nav-label nav-label-lower">MONITORING</div>
+          <button className={view === "Activity" ? "nav-active" : ""} onClick={() => go("Activity")}><Icon name="activity" />Activity</button>
+        </nav>
 
-          {view === "overview" && <section className="analytics-grid">
-            <article className="panel activity-panel"><div className="panel-heading"><div><h2>Execution activity</h2><p>Trace volume over the past seven days</p></div><span className="panel-badge">LAST 7 DAYS</span></div><ActivityChart traces={traces}/></article>
-            <article className="panel distribution-panel"><div className="panel-heading"><div><h2>Execution health</h2><p>Breakdown by current status</p></div><span className="panel-icon"><Icon name="activity"/></span></div><Distribution traces={traces}/></article>
-          </section>}
+        <div className="sidebar-bottom">
+          <div className="connection"><i className={apiOnline ? "online" : "offline"} />{apiOnline ? "API connected" : "API disconnected"}</div>
+          <div className="profile">
+            <div className="profile-avatar">R</div>
+            <div><b>Local Developer</b><small>Development workspace</small></div>
+            <span>···</span>
+          </div>
+          <div className="sidebar-version">TRACELENS <span>v0.1.0 · LOCAL</span></div>
+        </div>
+      </aside>
 
-          <section className="panel trace-panel">
-            <div className="panel-heading"><div><h2>{view === "traces" ? "All traces" : "Recent executions"}</h2><p>Inspect individual agent runs and their recorded spans.</p></div><span className="record-count">{filtered.length} RECORDS</span></div>
-            <div className="toolbar"><div className="search-box"><Icon name="search"/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by trace name or ID..."/><kbd>⌘ K</kbd></div><select value={filter} onChange={e => setFilter(e.target.value)}><option value="all">All statuses</option><option value="success">Success</option><option value="error">Error</option><option value="running">Running</option></select></div>
-            <div className="table-wrap"><table><thead><tr><th>EXECUTION</th><th>STATUS</th><th>DURATION</th><th>ENVIRONMENT</th><th>STARTED</th><th/></tr></thead><tbody>
-              {loading ? <tr><td colSpan={6} className="empty">Loading traces...</td></tr> : filtered.length === 0 ? <tr><td colSpan={6} className="empty">No traces found. Run your example agent to generate one.</td></tr> : filtered.map(trace => <tr key={trace.id} onClick={() => openTrace(trace.id)} className="trace-row"><td><div className="trace-name"><span className="trace-symbol"><Icon name="bolt"/></span><div><b>{trace.name}</b><small>{trace.id.slice(0, 20)}...</small></div></div></td><td><Status value={trace.status}/></td><td className="duration-cell">{duration(trace.duration_ms)}</td><td><span className="env-tag">{String(trace.metadata?.environment ?? "—")}</span></td><td className="muted">{timeAgo(trace.started_at)}</td><td className="arrow"><Icon name="arrow"/></td></tr>)}
-            </tbody></table></div>
-            <div className="panel-footer"><span>Showing latest {traces.length} traces</span><span>Auto-refreshes every 10 seconds <i/></span></div>
-          </section>
-        </> : <section className="detail-page">
-          <button className="back-button" onClick={() => setView("traces")}><Icon name="back"/> Back to traces</button>
-          {detailLoading ? <div className="panel empty">Loading trace details...</div> : detail && <>
-            <div className="detail-heading"><div><div className="eyebrow"><span/> TRACE INSPECTION</div><h1>{detail.trace.name}</h1><p className="trace-id">{detail.trace.id}</p></div><Status value={detail.trace.status}/></div>
-            <div className="metrics detail-metrics"><Metric label="Total duration" value={duration(detail.trace.duration_ms)} note="End-to-end execution" icon="clock"/><Metric label="Total spans" value={detail.spans.length.toString()} note="Recorded operations" icon="layers"/><Metric label="Failed spans" value={detail.spans.filter(s => s.status === "error").length.toString()} note="Errors captured" icon="alert" tone="orange"/></div>
-            <div className="panel"><div className="panel-heading"><div><h2>Execution timeline</h2><p>Agent operations and recorded spans</p></div><span className="record-count">{detail.spans.length} SPANS</span></div><div className="timeline">
-              {detail.spans.map(span => <div className="timeline-item" key={span.id}><div className={`timeline-marker ${span.status}`}><Icon name={span.type === "agent" ? "activity" : span.type === "tool" ? "bolt" : "layers"}/></div><div className="timeline-content"><button className="span-card" onClick={() => setExpanded(expanded === span.id ? null : span.id)}><div className="span-main"><div className="span-title"><b>{span.name}</b><span className={`type-tag ${span.type}`}>{span.type}</span></div><small>{span.id.slice(0, 20)}...</small></div><div className="span-right"><Status value={span.status}/><b>{duration(span.duration_ms)}</b><Icon name="chevron"/></div></button>
-                {expanded === span.id && <div className="span-expanded">{span.input != null && <CodePanel title="INPUT" value={span.input}/ >}{span.output != null && <CodePanel title="OUTPUT" value={span.output}/ >}{span.error && <div className="error-detail"><div className="code-label">ERROR · {span.error.name}</div><p>{span.error.message}</p>{span.error.stack && <pre>{span.error.stack}</pre>}</div>}</div>}
-              </div></div>)}
-              {detail.spans.length === 0 && <p className="empty">No spans recorded.</p>}
-            </div></div>
-            <div className="panel metadata-panel"><div className="panel-heading"><div><h2>Trace metadata</h2><p>Execution context and attributes</p></div></div><pre>{JSON.stringify(detail.trace.metadata, null, 2)}</pre></div>
-          </>}
-        </section>}
-        <footer>TraceLens <span>·</span> AI agent observability <span>·</span> Built for reliable agents</footer>
-      </div>
-    </main>
-  </div>;
+      {mobileNav && <button className="nav-backdrop" onClick={() => setMobileNav(false)} />}
+
+      <main className="main-area">
+        <header className="topbar">
+          <div className="breadcrumbs">
+            <button className="mobile-menu" onClick={() => setMobileNav(true)}><Icon name="menu" /></button>
+            <span>Workspace</span><Icon name="chevron" /><b>{selected ? "Trace details" : view}</b>
+          </div>
+          <div className="top-actions">
+            <span className="live-indicator"><i className={apiOnline ? "online" : "offline"} />{apiOnline ? "LIVE DATA" : "OFFLINE"}</span>
+            <button className="outline-button" onClick={() => setTheme(theme === "light" ? "dark" : "light")}><Icon name={theme === "light" ? "moon" : "sun"} />{theme === "light" ? "Dark mode" : "Light mode"}</button>
+            <button className="outline-button refresh-button" onClick={loadTraces}><Icon name="refresh" />Refresh</button>
+            <div className="top-avatar">R</div>
+          </div>
+        </header>
+
+        <div className="content">
+          {selected ? (
+            <section className="detail-view">
+              <button className="back-link" onClick={() => setSelected(null)}>← Back to {view}</button>
+              <div className="page-heading">
+                <div><div className="eyebrow">EXECUTION INSPECTOR</div><h1>{selected.trace.name}</h1><p className="subheading">Inspect the execution path, spans and captured errors.</p></div>
+                <Status status={selected.trace.status} />
+              </div>
+              <div className="detail-stats">
+                <Metric title="Duration" value={duration(selected.trace.duration_ms)} note="Total execution time" icon="clock" tone="blue" />
+                <Metric title="Total spans" value={selected.spans.length} note="Recorded operations" icon="layers" tone="teal" />
+                <Metric title="Failed spans" value={selected.spans.filter(s => s.status === "error").length} note="Operations requiring attention" icon="alert" tone="orange" />
+              </div>
+              <div className="panel detail-panel">
+                <div className="panel-heading"><div><h2>Execution timeline</h2><p>Follow the operations performed during this run.</p></div><span className="record-count">{selected.spans.length} SPANS</span></div>
+                <div className="timeline">
+                  {selected.spans.map((span, index) => (
+                    <details className="span-item" key={span.id} open={span.status === "error"}>
+                      <summary>
+                        <span className={`span-type span-${span.type}`}>{span.type?.toUpperCase()}</span>
+                        <span className="span-name">{span.name}</span>
+                        <Status status={span.status} />
+                        <span className="span-duration">{duration(span.duration_ms)}</span>
+                        <span className="span-expand">⌄</span>
+                      </summary>
+                      <div className="span-content">
+                        {span.error && <div className="error-block"><b>{span.error.name || "Error"}</b><p>{span.error.message}</p>{span.error.stack && <pre>{span.error.stack}</pre>}</div>}
+                        <div className="payload-grid">
+                          <div><h4>INPUT</h4><pre>{JSON.stringify(span.input ?? {}, null, 2)}</pre></div>
+                          <div><h4>OUTPUT</h4><pre>{JSON.stringify(span.output ?? {}, null, 2)}</pre></div>
+                        </div>
+                        {span.attributes && <div className="attributes"><h4>ATTRIBUTES</h4><pre>{JSON.stringify(span.attributes, null, 2)}</pre></div>}
+                      </div>
+                    </details>
+                  ))}
+                  {!selected.spans.length && <div className="empty-state">No spans were recorded for this execution.</div>}
+                </div>
+              </div>
+              <div className="panel metadata-panel"><h2>Trace metadata</h2><pre>{JSON.stringify(selected.trace.metadata || {}, null, 2)}</pre></div>
+            </section>
+          ) : (
+            <>
+              <div className="page-heading">
+                <div><div className="eyebrow">AGENT OBSERVABILITY</div><h1>{view === "Overview" ? "Good morning, developer" : view}</h1><p className="subheading">{view === "Overview" ? "Here's what's happening across your AI agent executions." : view === "Traces" ? "Search, inspect and debug individual agent executions." : "A live feed of recent agent execution activity."}</p></div>
+                <div className="heading-date">{new Date().toLocaleDateString("en", { weekday: "long", day: "numeric", month: "long" })}</div>
+              </div>
+
+              {error && <div className="error-banner"><Icon name="alert" />{error}<button onClick={loadTraces}>Retry</button></div>}
+
+              {view === "Overview" && (
+                <>
+                  <section className="metrics-grid">
+                    <Metric title="Total executions" value={traces.length} note="Stored traces" icon="layers" tone="teal" />
+                    <Metric title="Successful runs" value={successful} note={`${successRate}% success rate`} icon="check" tone="green" />
+                    <Metric title="Failed executions" value={failed} note="Require attention" icon="alert" tone="orange" />
+                    <Metric title="Average latency" value={duration(average)} note="Across loaded executions" icon="clock" tone="blue" />
+                  </section>
+                  <section className="analytics-grid">
+                    <div className="panel activity-panel">
+                      <div className="panel-heading"><div><h2>Execution activity</h2><p>Trace volume over the past seven days</p></div><span className="period-pill">LAST 7 DAYS</span></div>
+                      <div className="chart-summary"><b>{traces.length}</b><span>executions loaded</span></div>
+                      <ActivityChart traces={traces} />
+                    </div>
+                    <div className="panel health-panel">
+                      <div className="panel-heading"><div><h2>Execution health</h2><p>Breakdown by current status</p></div><span className="metric-icon teal"><Icon name="activity" /></span></div>
+                      <div className="health-total"><b>{traces.length}</b><span>Total executions</span></div>
+                      {[["Successful", successful, "green"], ["Failed", failed, "red"], ["Running", traces.filter(t => t.status === "running").length, "orange"]].map(([label, count, color]) => (
+                        <div className="health-row" key={String(label)}>
+                          <div><span><i className={`health-dot ${color}`} />{label}</span><b>{count}</b></div>
+                          <div className="health-track"><i className={String(color)} style={{ width: `${traces.length ? Number(count) / traces.length * 100 : 0}%` }} /></div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </>
+              )}
+
+              <section className="panel traces-panel">
+                <div className="panel-heading"><div><h2>{view === "Overview" ? "Recent executions" : view === "Traces" ? "All executions" : "Recent activity"}</h2><p>Inspect individual agent executions and their spans.</p></div><span className="record-count">{filtered.length} RECORDS</span></div>
+                <div className="table-toolbar">
+                  <label className="search-box"><Icon name="search" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search traces by name or ID..." /><kbd>⌘ K</kbd></label>
+                  <select value={filter} onChange={e => setFilter(e.target.value)}><option value="all">All statuses</option><option value="success">Successful</option><option value="error">Failed</option><option value="running">Running</option></select>
+                </div>
+                <div className="table-scroll">
+                  <table>
+                    <thead><tr><th>EXECUTION</th><th>STATUS</th><th>DURATION</th><th>ENVIRONMENT</th><th>STARTED</th><th /></tr></thead>
+                    <tbody>
+                      {filtered.map(trace => (
+                        <tr key={trace.id} onClick={() => openTrace(trace)}>
+                          <td><div className="trace-cell"><span className="trace-symbol"><Icon name="activity" /></span><span><b>{trace.name}</b><small>{trace.id}</small></span></div></td>
+                          <td><Status status={trace.status} /></td>
+                          <td className="mono">{duration(trace.duration_ms)}</td>
+                          <td><span className="environment">{String(trace.metadata?.environment || "local")}</span></td>
+                          <td className="muted">{timeAgo(trace.started_at)}</td>
+                          <td><button className="row-open" aria-label="Open trace"><Icon name="arrow" /></button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!filtered.length && <div className="empty-state">{loading ? "Loading executions…" : "No matching traces found."}</div>}
+                </div>
+                <div className="table-footer"><span>Showing {filtered.length} of {traces.length} loaded traces</span><span>Auto-refreshes every 10 seconds <i className="online" /></span></div>
+              </section>
+              <footer className="footer">TRACELENS <span>·</span> AI AGENT OBSERVABILITY <span>·</span> LOCAL DEVELOPMENT</footer>
+            </>
+          )}
+        </div>
+      </main>
+    </div>
+  );
 }
 
-function CodePanel({ title, value }: { title: string; value: unknown }) {
-  return <div className="code-panel"><div className="code-label">{title}</div><pre>{JSON.stringify(value, null, 2)}</pre></div>;
+export default App;
+
+import { createRoot } from "react-dom/client";
+
+const rootElement = document.getElementById("root");
+
+if (!rootElement) {
+  throw new Error("TraceLens root element was not found");
 }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><App/></React.StrictMode>);
+createRoot(rootElement).render(<App />);
